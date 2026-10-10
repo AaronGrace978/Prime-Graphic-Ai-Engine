@@ -1,0 +1,4 @@
+# Torch is installed separately so Colab keeps its CUDA build.
+# Local CPU: pip install torch --index-url https://download.pytorch.org/whl/cpu
+numpy>=1.26
+pillow>=10

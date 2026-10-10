@@ -1,0 +1,25 @@
+[project]
+name = "prime-engine"
+version = "0.1.0"
+description = "Phase 0 prototype of a commercializable diffusion world engine with Solidify persistence."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Prime Graphic AI Engine"}]
+dependencies = [
+  "numpy>=1.26",
+  "pillow>=10",
+]
+
+[project.optional-dependencies]
+train = ["torch>=2.2"]
+
+[project.scripts]
+prime-demo = "prime_engine.demo:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["prime_engine*"]

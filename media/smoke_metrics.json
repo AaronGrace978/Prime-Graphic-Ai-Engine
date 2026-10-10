@@ -1,0 +1,34 @@
+{
+  "state_hash_before_edit": "56497b297d31cece",
+  "state_hash_locked": "38926bdb63b7e7a4",
+  "state_hash_return": "38926bdb63b7e7a4",
+  "hash_matches_on_return": true,
+  "hash_changed_on_edit": true,
+  "frames": 842,
+  "foyer_status": "SOLID",
+  "foyer_voxels": 3789,
+  "guide": {
+    "psnr": 20.3,
+    "perceptual": 0.0193
+  },
+  "short_context": {
+    "psnr": 14.2,
+    "perceptual": 0.0832
+  },
+  "diffusion_only": {
+    "psnr": 8.01,
+    "perceptual": 0.2756
+  },
+  "diffusion_solidify": {
+    "psnr": 20.04,
+    "perceptual": 0.0301
+  },
+  "solidify_guard": {
+    "psnr": 19.67,
+    "perceptual": 0.0306
+  },
+  "train_steps": 120,
+  "train_loss_last10": 0.1576,
+  "parameters": 1180739,
+  "device": "cpu"
+}
