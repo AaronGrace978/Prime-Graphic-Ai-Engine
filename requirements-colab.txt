@@ -1,0 +1,4 @@
+# Colab already ships torch/numpy/pillow/matplotlib/ipywidgets; only add what is missing.
+imageio>=2.34
+PyYAML>=6
+tqdm>=4.66

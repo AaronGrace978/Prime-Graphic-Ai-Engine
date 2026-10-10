@@ -1,0 +1,30 @@
+# Local RTX 5060 Ti 16 GB (Blackwell, bf16). Bigger UNet, more data, longer schedule.
+# For 128x128: set world.width/height to 128, add a level to ch_mults, and halve batch_size.
+world:
+  width: 64
+  height: 64
+data:
+  path: data/rooms_64_large.npz
+  episodes: 1500
+  length: 200
+model:
+  context_frames: 4
+  memory_slots: 3
+  base_ch: 96
+  ch_mults: [1, 2, 2, 2]
+  num_res_blocks: 2
+  attn_levels: [2, 3]
+  cond_dim: 384
+train:
+  out_dir: runs/rtx5060ti
+  steps: 60000
+  batch_size: 64
+  lr: 2.0e-4
+  warmup: 1000
+  ema_decay: 0.9995
+  compile: true
+  log_every: 100
+  ckpt_every: 2000
+eval:
+  worlds: 64
+  sample_steps: 16

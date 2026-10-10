@@ -1,0 +1,28 @@
+# Free Colab T4 (16 GB, fp16). 64x64 frames, ~10M-param UNet.
+world:
+  width: 64
+  height: 64
+data:
+  path: data/rooms_64.npz
+  episodes: 600
+  length: 200
+model:
+  context_frames: 4
+  memory_slots: 2
+  base_ch: 64
+  ch_mults: [1, 2, 2, 2]
+  num_res_blocks: 2
+  attn_levels: [2, 3]
+  cond_dim: 256
+train:
+  out_dir: runs/colab_t4
+  steps: 20000
+  batch_size: 64
+  lr: 2.0e-4
+  warmup: 500
+  ema_decay: 0.999
+  log_every: 100
+  ckpt_every: 1000
+eval:
+  worlds: 32
+  sample_steps: 16

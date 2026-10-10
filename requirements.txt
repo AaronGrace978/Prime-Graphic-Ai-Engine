@@ -1,0 +1,16 @@
+# Pinned versions verified for this PoC. All licenses are commercially permissive (see README).
+#
+# PyTorch: install the build matching your hardware FIRST, then `pip install -r requirements.txt`.
+#   RTX 50-series (Blackwell, sm_120) needs CUDA 12.8+ wheels:
+#     pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cu128
+#   CPU only:
+#     pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+#   Colab: keep the preinstalled torch and use requirements-colab.txt.
+torch==2.14.1
+numpy==2.5.3
+pillow==12.3.0
+imageio==2.38.1
+PyYAML==6.0.3
+tqdm==4.70.1
+matplotlib==3.11.2
+pytest==9.1.1

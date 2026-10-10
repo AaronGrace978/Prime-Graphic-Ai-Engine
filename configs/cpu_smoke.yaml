@@ -1,0 +1,28 @@
+# Tiny config that trains on a laptop CPU (or in seconds on any GPU). 32x32 frames.
+world:
+  width: 32
+  height: 32
+data:
+  path: data/rooms_32.npz
+  episodes: 300
+  length: 200
+model:
+  context_frames: 4
+  memory_slots: 2
+  base_ch: 32
+  ch_mults: [1, 2, 2]
+  num_res_blocks: 1
+  attn_levels: [2]
+  cond_dim: 128
+train:
+  out_dir: runs/cpu_smoke
+  steps: 3000
+  batch_size: 32
+  lr: 5.0e-4
+  warmup: 200
+  ema_decay: 0.995
+  log_every: 50
+  ckpt_every: 500
+eval:
+  worlds: 16
+  sample_steps: 12
