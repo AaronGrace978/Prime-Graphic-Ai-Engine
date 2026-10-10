@@ -51,6 +51,17 @@ def precompute_retrieval(poses: np.ndarray, K: int, M: int, hcfg: SolidifyConfig
     return idx, feats
 
 
+def hue_rotate(x: torch.Tensor, angle: torch.Tensor) -> torch.Tensor:
+    """Rotate colours of x [B, ..., 3, H, W] in [-1, 1] about the grey axis by angle [B] (radians)."""
+    k = torch.full((3,), 3 ** -0.5, device=x.device)
+    K = torch.tensor([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]], device=x.device)
+    c, s = torch.cos(angle)[:, None, None], torch.sin(angle)[:, None, None]
+    R = c * torch.eye(3, device=x.device) + s * K + (1 - c) * torch.outer(k, k)  # Rodrigues, [B, 3, 3]
+    shape = x.shape
+    flat = x.reshape(shape[0], -1, 3, shape[-2] * shape[-1])
+    return torch.einsum("bij,bnjp->bnip", R, flat).reshape(shape).clamp(-1, 1)
+
+
 class TrajectoryBatcher:
     def __init__(self, data: dict, K: int, M: int, hcfg: SolidifyConfig, vis_fn: Callable | None = None,
                  device="cpu", revisit_age: int = 20):
@@ -73,7 +84,9 @@ class TrajectoryBatcher:
         self.revisit_share = rev[:, K:].float().mean().item()
 
     def sample(self, batch: int, gen: torch.Generator, max_aug: float, mem_drop: float, slot_drop: float,
-               revisit_frac: float = 0.0) -> dict:
+               revisit_frac: float = 0.0, ctx_corrupt: float = 0.0) -> dict:
+        """ctx_corrupt: prob. of hue-rotating the context (only when memory is present) so the model
+        learns to take appearance from Solidify memory when its own recent frames have drifted."""
         n = torch.randint(0, self.N, (batch,), generator=gen)
         i = torch.randint(self.K, self.T1, (batch,), generator=gen)
         n_rev = int(round(batch * revisit_frac)) if len(self.revisit_index) else 0
@@ -90,10 +103,15 @@ class TrajectoryBatcher:
         keep = (torch.rand(batch, 1, generator=gen) >= mem_drop) & (torch.rand(batch, self.M, generator=gen) >= slot_drop)
         mpose = mpose * keep[..., None].float()
         level = torch.rand(batch, generator=gen) * max_aug
+        corrupt = (torch.rand(batch, generator=gen) < ctx_corrupt) & (mpose[..., -1].sum(1) > 0)
+        angle = (torch.rand(batch, generator=gen) * 4 + 1) * (torch.pi / 3)  # 60..300 degrees
 
         d = self.device
         to_f = lambda x: x.to(d, non_blocking=True).float() / 127.5 - 1.0  # noqa: E731
         ctx, mem, target = to_f(ctx), to_f(mem), to_f(target)
+        if corrupt.any():
+            ci = corrupt.nonzero().flatten().to(d)
+            ctx[ci] = hue_rotate(ctx[ci], angle.to(d)[ci])
         mpose, level = mpose.to(d), level.to(d)
         valid = mpose[..., -1, None, None, None]
         lv = level[:, None, None, None, None]

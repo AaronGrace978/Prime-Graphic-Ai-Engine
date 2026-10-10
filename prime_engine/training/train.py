@@ -73,6 +73,11 @@ def train(cfg: Config, data: dict | None = None, progress: bool = True) -> str:
 
     model = build_model(cfg).to(device)
     ema = copy.deepcopy(model).eval().requires_grad_(False)
+    if t_cfg.init_from:
+        ckpt = torch.load(t_cfg.init_from, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        ema.load_state_dict(ckpt["ema"])
+        print(f"[model] initialised from {t_cfg.init_from} (step {ckpt.get('step')})")
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[model] {n_params / 1e6:.2f}M params on {device}")
     diffusion = Diffusion()
@@ -91,7 +96,8 @@ def train(cfg: Config, data: dict | None = None, progress: bool = True) -> str:
 
     t0, running = time.time(), 0.0
     for step in range(1, t_cfg.steps + 1):
-        b = batcher.sample(t_cfg.batch_size, gen, t_cfg.max_aug, t_cfg.mem_drop, t_cfg.slot_drop, t_cfg.revisit_frac)
+        b = batcher.sample(t_cfg.batch_size, gen, t_cfg.max_aug, t_cfg.mem_drop, t_cfg.slot_drop, t_cfg.revisit_frac,
+                           t_cfg.ctx_corrupt)
         target = b.pop("target")
         with torch.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
             loss = diffusion.loss(fwd, target, **b)

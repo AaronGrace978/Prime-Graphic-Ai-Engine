@@ -5,6 +5,7 @@ import dataclasses
 import json
 import os
 
+import numpy as np
 import torch
 
 from prime_engine.eval import comparison_gif, revisit_figure, run_revisit_benchmark
@@ -36,12 +37,26 @@ def main():
                                 seed=cfg.eval.seed, device=device,
                                 away=tuple(int(r) for r in args.away.split(",")), extra_modes=extra)
     summary = {m: r["metrics"] for m, r in res["modes"].items()}
+    base = res["modes"]["no_harness"]["per_world"]
+    paired = {}
+    for m, r in res["modes"].items():
+        if m == "no_harness":
+            continue
+        paired[m] = {}
+        for k in base[0]:
+            diff = np.array([p[k] - b[k] for p, b in zip(r["per_world"], base)], dtype=np.float64)
+            diff = diff[np.isfinite(diff)]
+            paired[m][k] = {"mean_diff": float(diff.mean()), "stderr": float(diff.std(ddof=1) / np.sqrt(len(diff))),
+                            "win_rate": float((diff > 0).mean())}
+    summary["_paired_vs_no_harness"] = paired
+    summary["_per_world"] = {m: r["per_world"] for m, r in res["modes"].items()}
     summary["_meta"] = {"ckpt": args.ckpt, "worlds": len(res["episodes"]), "away": args.away,
                         "frames_per_world": int(len(res["episodes"][0].poses)),
                         "cells_world0_solidify": res["modes"]["solidify"]["cells_world0"]}
     with open(os.path.join(out, "revisit_metrics.json"), "w") as f:
         json.dump(summary, f, indent=2)
     print(json.dumps({m: summary[m] for m in res["modes"]}, indent=2))
+    print(json.dumps(paired, indent=2))
     for w in range(min(args.gif_worlds, len(res["episodes"]))):
         print("wrote", comparison_gif(res, w, os.path.join(out, f"revisit_world{w}.gif")))
         print("wrote", revisit_figure(res, w, os.path.join(out, f"revisit_world{w}.png")))
