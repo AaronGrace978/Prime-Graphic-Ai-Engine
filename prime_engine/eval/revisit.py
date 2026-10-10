@@ -38,6 +38,7 @@ class RevisitEpisode:
     phases: list             # [T+1] phase label per frame
     rgb: np.ndarray          # [T+1, H, W, 3] ground truth
     instance: np.ndarray     # [T+1, H, W]
+    vis: np.ndarray          # [T+1, D] engine visibility vectors (FOV retrieval)
 
 
 def build_revisit_episode(cfg: WorldConfig, seed: int, context_frames: int = 4, home: int = 0,
@@ -75,7 +76,8 @@ def build_revisit_episode(cfg: WorldConfig, seed: int, context_frames: int = 4, 
         rgb.append(f)
         inst.append(i)
     cells = np.array([world.room_at(p[0], p[1]) for p in poses])
-    return RevisitEpisode(world, np.array(actions), poses, cells, phases, np.stack(rgb), np.stack(inst))
+    vis = np.stack([world.visibility(p) for p in poses])
+    return RevisitEpisode(world, np.array(actions), poses, cells, phases, np.stack(rgb), np.stack(inst), vis)
 
 
 @torch.no_grad()
@@ -92,13 +94,15 @@ def rollout_episodes(model, episodes: list[RevisitEpisode], memory_cfg: Solidify
     runner.reset(np.stack([e.rgb[:K] for e in episodes]), boot_actions, np.stack([e.poses[:K] for e in episodes]),
                  cell_ids=np.stack([e.cells[:K] for e in episodes]) if use_cells else None,
                  cell_graphs=[e.world.cell_graph() for e in episodes] if use_cells else None,
-                 world_seeds=[e.world.world_seed for e in episodes])
+                 world_seeds=[e.world.world_seed for e in episodes],
+                 visibility=np.stack([e.vis[:K] for e in episodes]))
     out = np.zeros((B, T1) + episodes[0].rgb.shape[1:], np.uint8)
     out[:, :K] = np.stack([e.rgb[:K] for e in episodes])
     for t in range(K, T1):
         out[:, t] = runner.step(np.array([e.actions[t - 1] for e in episodes]),
                                 np.stack([e.poses[t] for e in episodes]),
-                                np.array([e.cells[t] for e in episodes]) if use_cells else None)
+                                np.array([e.cells[t] for e in episodes]) if use_cells else None,
+                                visibility=np.stack([e.vis[t] for e in episodes]))
     return out, runner
 
 
@@ -137,6 +141,7 @@ def run_revisit_benchmark(model, world_cfg: WorldConfig, harness_cfg: SolidifyCo
         cut = len(e.poses) - T1
         if cut:  # drop frames from the end of the revisit look-around
             e.poses, e.cells, e.rgb, e.instance = e.poses[:T1], e.cells[:T1], e.rgb[:T1], e.instance[:T1]
+            e.vis = e.vis[:T1]
             e.actions, e.phases = e.actions[:T1 - 1], e.phases[:T1]
     modes = {"no_harness": None, "solidify": harness_cfg, **(extra_modes or {})}
     results = {"episodes": episodes, "modes": {}}

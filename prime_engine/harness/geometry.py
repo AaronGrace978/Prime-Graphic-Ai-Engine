@@ -23,6 +23,12 @@ def view_distance(query: np.ndarray, poses: np.ndarray, angle_weight: float = 1.
     return d_pos + angle_weight * d_ang
 
 
+def pose_key(pose, pos_cell: float, heading_bins: int) -> tuple[int, int, int]:
+    x, y, th = pose
+    hb = int(np.round((th % (2 * np.pi)) / (2 * np.pi) * heading_bins)) % heading_bins
+    return int(np.floor(x / pos_cell)), int(np.floor(y / pos_cell)), hb
+
+
 def relative_pose_features(query: np.ndarray, poses: np.ndarray) -> np.ndarray:
     """Features of memory poses [..., 3] expressed in the query camera frame -> [..., 5]."""
     dx, dy = poses[..., 0] - query[0], poses[..., 1] - query[1]

@@ -173,19 +173,11 @@ class RoomWorld:
         return self.pose.copy()
 
     # ------------------------------------------------------------ rendering
-    def render(self, pose=None, aux: bool = False):
-        """Render an HxWx3 uint8 frame from `pose` (defaults to current pose).
-
-        With aux=True also returns linear depth (float16, world units along the
-        optical axis) and an instance map (int8: room id for walls, DOOR_ROOM for
-        door jambs, FLOOR_ID / CEIL_ID).
-        """
-        c = self.cfg
-        ss = c.supersample
-        W, H = c.width * ss, c.height * ss
-        x, y, th = self.pose if pose is None else pose
-        half = np.tan(np.deg2rad(c.fov_deg) / 2)
-        cam = (2 * (np.arange(W) + 0.5) / W - 1) * half
+    def _cast(self, pose, n_cols: int):
+        """Vectorised DDA over n_cols screen columns."""
+        x, y, th = pose
+        half = np.tan(np.deg2rad(self.cfg.fov_deg) / 2)
+        cam = (2 * (np.arange(n_cols) + 0.5) / n_cols - 1) * half
         dir_x, dir_y = np.cos(th), np.sin(th)
         # Screen x grows to the right == clockwise in our (y-down) map frame.
         plane_x, plane_y = -dir_y, dir_x
@@ -194,17 +186,17 @@ class RoomWorld:
         with np.errstate(divide="ignore"):
             ddx = np.where(rdx == 0, 1e30, np.abs(1 / rdx))
             ddy = np.where(rdy == 0, 1e30, np.abs(1 / rdy))
-        mx = np.full(W, int(np.floor(x)))
-        my = np.full(W, int(np.floor(y)))
+        mx = np.full(n_cols, int(np.floor(x)))
+        my = np.full(n_cols, int(np.floor(y)))
         step_x = np.where(rdx < 0, -1, 1)
         step_y = np.where(rdy < 0, -1, 1)
         sdx = np.where(rdx < 0, (x - mx) * ddx, (mx + 1 - x) * ddx)
         sdy = np.where(rdy < 0, (y - my) * ddy, (my + 1 - y) * ddy)
-        hit = np.zeros(W, bool)
-        side = np.zeros(W, np.int8)
+        hit = np.zeros(n_cols, bool)
+        side = np.zeros(n_cols, np.int8)
         prev_x, prev_y = mx.copy(), my.copy()
         gh, gw = self.grid.shape
-        for _ in range(c.max_ray_steps):
+        for _ in range(self.cfg.max_ray_steps):
             active = ~hit
             if not active.any():
                 break
@@ -219,8 +211,40 @@ class RoomWorld:
             side = np.where(go_x, 0, np.where(go_y, 1, side)).astype(np.int8)
             mxc, myc = np.clip(mx, 0, gw - 1), np.clip(my, 0, gh - 1)
             hit |= active & (self.grid[myc, mxc] == 1)
-        perp = np.where(side == 0, sdx - ddx, sdy - ddy)
-        perp = np.maximum(perp, 1e-3)
+        perp = np.maximum(np.where(side == 0, sdx - ddx, sdy - ddy), 1e-3)
+        return perp, side, mx, my, prev_x, prev_y, rdx, rdy
+
+    @property
+    def n_surfaces(self) -> int:
+        return self.grid.size * 4
+
+    def visibility(self, pose, n_cols: int | None = None) -> np.ndarray:
+        """Unit-norm histogram of which wall faces are on screen (engine-side FOV signal).
+
+        Each grid wall face is a "surfel"; two views overlap to the extent they see
+        the same faces. Anchored-mode stand-in for the plan's FOV-overlap / surfel-vote retrieval.
+        """
+        n_cols = n_cols or self.cfg.width
+        _, side, mx, my, prev_x, prev_y, _, _ = self._cast(pose, n_cols)
+        gh, gw = self.grid.shape
+        face = np.where(side == 0, (prev_x < mx).astype(int), 2 + (prev_y < my).astype(int))
+        ids = (np.clip(my, 0, gh - 1) * gw + np.clip(mx, 0, gw - 1)) * 4 + face
+        h = np.bincount(ids, minlength=self.n_surfaces).astype(np.float32)
+        return h / max(np.linalg.norm(h), 1e-6)
+
+    def render(self, pose=None, aux: bool = False):
+        """Render an HxWx3 uint8 frame from `pose` (defaults to current pose).
+
+        With aux=True also returns linear depth (float16, world units along the
+        optical axis) and an instance map (int8: room id for walls, DOOR_ROOM for
+        door jambs, FLOOR_ID / CEIL_ID).
+        """
+        c = self.cfg
+        ss = c.supersample
+        W, H = c.width * ss, c.height * ss
+        x, y, th = self.pose if pose is None else pose
+        perp, side, mx, my, prev_x, prev_y, rdx, rdy = self._cast((x, y, th), W)
+        gh, gw = self.grid.shape
         # Wall texture coordinate for subtle vertical panels (motion cue).
         wall_u = np.where(side == 0, y + perp * rdy, x + perp * rdx)
         wall_u = wall_u - np.floor(wall_u)

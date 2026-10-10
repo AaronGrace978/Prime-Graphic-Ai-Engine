@@ -60,15 +60,19 @@ def test_train_step_and_rollout():
     cfg = load_config(None, ["model.base_ch=16", "model.cond_dim=32", "model.num_res_blocks=1"])
     model = build_model(cfg)
     data = generate_dataset(SMALL, 2, 30, workers=1)
-    batcher = TrajectoryBatcher(data, cfg.model.context_frames, cfg.model.memory_slots, 1.5, 3.0)
-    b = batcher.sample(4, torch.Generator().manual_seed(0), 0.3, 0.25, 0.15)
+    batcher = TrajectoryBatcher(data, cfg.model.context_frames, cfg.model.memory_slots, cfg.harness,
+                                vis_fn=RoomWorld(SMALL).visibility)
+    b = batcher.sample(4, torch.Generator().manual_seed(0), 0.3, 0.25, 0.15, revisit_frac=0.5)
     loss = Diffusion().loss(model, b.pop("target"), **b)
     loss.backward()
     assert torch.isfinite(loss)
 
     runner = WorldModelRunner(model, Diffusion(), batch=1, sample_steps=2, memory_cfg=cfg.harness)
     K = cfg.model.context_frames
+    w = RoomWorld(SMALL)
+    vis = np.stack([w.visibility(p) for p in data["player_pose"][0, :K + 1]])[None]
     runner.reset(data["rgb"][:1, :K], np.zeros((1, K), int), data["player_pose"][:1, :K].astype(np.float64),
-                 cell_ids=data["cell_id"][:1, :K])
-    frame = runner.step([TURN_RIGHT], data["player_pose"][:1, K], cell_ids=data["cell_id"][:1, K])
+                 cell_ids=data["cell_id"][:1, :K], visibility=vis[:, :K])
+    frame = runner.step([TURN_RIGHT], data["player_pose"][:1, K], cell_ids=data["cell_id"][:1, K],
+                        visibility=vis[:, K])
     assert frame.shape == (1, 16, 16, 3) and len(runner.stores[0]) >= 1

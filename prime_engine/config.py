@@ -44,6 +44,7 @@ class TrainConfig:
     max_aug: float = 0.3       # max noise level added to context/memory frames (anti-drift)
     mem_drop: float = 0.25     # prob. of dropping all memory slots (teaches harness-off mode)
     slot_drop: float = 0.15    # prob. of dropping each memory slot independently
+    revisit_frac: float = 0.5  # share of each batch drawn from revisit targets (place last seen long ago)
     amp: bool = True
     compile: bool = False
     log_every: int = 100

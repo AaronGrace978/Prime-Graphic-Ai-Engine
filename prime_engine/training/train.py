@@ -12,7 +12,7 @@ import torch
 from ..config import Config, config_from_dict, config_to_dict
 from ..models import Diffusion, WorldUNet
 from ..world.dataset import generate_dataset, load_dataset
-from ..world.raycaster import NUM_ACTIONS
+from ..world.raycaster import NUM_ACTIONS, RoomWorld
 from .data import TrajectoryBatcher
 
 
@@ -65,9 +65,11 @@ def train(cfg: Config, data: dict | None = None, progress: bool = True) -> str:
     device = pick_device(t_cfg.device)
     torch.manual_seed(t_cfg.seed)
     data = data if data is not None else ensure_dataset(cfg)
-    batcher = TrajectoryBatcher(data, cfg.model.context_frames, cfg.model.memory_slots, cfg.harness.angle_weight,
-                                cfg.harness.max_distance, device=device)
-    print(f"[data] {batcher.N} episodes x {batcher.T1} frames; memory slot coverage {batcher.memory_coverage:.2f}")
+    vis_world = RoomWorld(cfg.world, seed=0)  # visibility depends on geometry only, not on room colours
+    batcher = TrajectoryBatcher(data, cfg.model.context_frames, cfg.model.memory_slots, cfg.harness,
+                                vis_fn=vis_world.visibility, device=device)
+    print(f"[data] {batcher.N} episodes x {batcher.T1} frames; memory coverage {batcher.memory_coverage:.2f}, "
+          f"revisit targets {batcher.revisit_share:.2f} (sampled at {t_cfg.revisit_frac:.2f})")
 
     model = build_model(cfg).to(device)
     ema = copy.deepcopy(model).eval().requires_grad_(False)
@@ -89,7 +91,7 @@ def train(cfg: Config, data: dict | None = None, progress: bool = True) -> str:
 
     t0, running = time.time(), 0.0
     for step in range(1, t_cfg.steps + 1):
-        b = batcher.sample(t_cfg.batch_size, gen, t_cfg.max_aug, t_cfg.mem_drop, t_cfg.slot_drop)
+        b = batcher.sample(t_cfg.batch_size, gen, t_cfg.max_aug, t_cfg.mem_drop, t_cfg.slot_drop, t_cfg.revisit_frac)
         target = b.pop("target")
         with torch.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
             loss = diffusion.loss(fwd, target, **b)

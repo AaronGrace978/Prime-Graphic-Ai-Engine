@@ -29,7 +29,7 @@ from typing import Any
 import numpy as np
 
 from ..world.schema import stable_hash
-from .geometry import POSE_FEAT_DIM, relative_pose_features, view_distance
+from .geometry import POSE_FEAT_DIM, pose_key, relative_pose_features, view_distance
 
 
 class CellStatus(str, Enum):
@@ -45,6 +45,7 @@ class Keyframe:
     payload: Any
     step: int
     content_hash: int
+    vis: np.ndarray | None = None
     hits: int = 0
 
 
@@ -68,8 +69,10 @@ class SolidifyConfig:
     pos_cell: float = 0.5          # world units per keyframe position bin
     heading_bins: int = 24         # 15 degree bins
     policy: str = "first_write"    # "first_write" (solidify) | "overwrite" (latest wins, no locking)
-    angle_weight: float = 1.5      # must match training retrieval
-    max_distance: float = 3.0      # views farther than this are not returned
+    retrieval: str = "fov"         # "fov" (overlap of visible surfaces, needs engine visibility) | "pose"
+    min_overlap: float = 0.3       # fov: minimum cosine overlap of visibility histograms
+    angle_weight: float = 1.5      # pose: must match training retrieval
+    max_distance: float = 3.0      # pose: views farther than this are not returned
     exclude_recent: int = 4        # skip views still inside the model's context window (= context_frames)
     lock_coverage: float = 0.9     # heading coverage at which a cell turns SOLID
     neighbor_search: bool = True   # retrieve from current cell + portal neighbours only
@@ -117,9 +120,7 @@ class SolidifyStore:
         return f"g{int(np.floor(pose[0] / s))}_{int(np.floor(pose[1] / s))}"
 
     def pose_key(self, pose) -> tuple[int, int, int]:
-        x, y, th = pose
-        hb = int(np.round((th % (2 * np.pi)) / (2 * np.pi) * self.cfg.heading_bins)) % self.cfg.heading_bins
-        return int(np.floor(x / self.cfg.pos_cell)), int(np.floor(y / self.cfg.pos_cell)), hb
+        return pose_key(pose, self.cfg.pos_cell, self.cfg.heading_bins)
 
     def state_hash(self, cid) -> int:
         c = self.cells[cid]
@@ -135,8 +136,8 @@ class SolidifyStore:
         c.status = CellStatus.DIRTY
 
     # ---------------------------------------------------------- write/read
-    def write(self, pose, payload, step: int, cell_id=None) -> bool:
-        """Offer a rendered view to its cell. Returns True if the store changed."""
+    def write(self, pose, payload, step: int, cell_id=None, vis: np.ndarray | None = None) -> bool:
+        """Offer a rendered view to its cell (vis = engine visibility vector). Returns True if stored."""
         cid = self.cell_id_for(pose, cell_id)
         if cid is None:
             return False
@@ -146,7 +147,8 @@ class SolidifyStore:
         k = self.pose_key(pose)
         if k in c.keyframes and self.cfg.policy == "first_write":
             return False
-        c.keyframes[k] = Keyframe(np.asarray(pose, dtype=np.float64).copy(), payload, step, _content_hash(payload))
+        c.keyframes[k] = Keyframe(np.asarray(pose, dtype=np.float64).copy(), payload, step, _content_hash(payload),
+                                  None if vis is None else np.asarray(vis, np.float32))
         if c.status in (CellStatus.UNSEEN, CellStatus.DIRTY):
             c.status = CellStatus.FORMING
         if (self.cfg.policy == "first_write" and c.status == CellStatus.FORMING
@@ -161,24 +163,33 @@ class SolidifyStore:
         ids = [cid, *self.cells[cid].neighbors]
         return [self.cells[i] for i in ids if i in self.cells]
 
-    def retrieve(self, query_pose, k: int, current_step: int | None = None, cell_id=None):
-        """Up to k closest stored views as [(Keyframe, distance)], skipping ones still in context."""
+    def retrieve(self, query_pose, k: int, current_step: int | None = None, cell_id=None,
+                 vis: np.ndarray | None = None):
+        """Up to k best stored views as [(Keyframe, score)], skipping ones still in context.
+
+        FOV mode ranks by visibility overlap (higher = better); pose mode by pose distance (lower = better).
+        """
         cid = self.cell_id_for(query_pose, cell_id)
         items = [kf for c in self._candidate_cells(cid) for kf in c.keyframes.values()]
         if current_step is not None and self.cfg.exclude_recent:
             items = [e for e in items if e.step < current_step - self.cfg.exclude_recent]
         if not items:
             return []
-        d = view_distance(np.asarray(query_pose, dtype=np.float64), np.stack([e.pose for e in items]),
-                          self.cfg.angle_weight)
-        out = [(items[i], float(d[i])) for i in np.argsort(d)[:k] if d[i] <= self.cfg.max_distance]
+        if self.cfg.retrieval == "fov" and vis is not None and all(e.vis is not None for e in items):
+            s = np.stack([e.vis for e in items]) @ np.asarray(vis, np.float32)
+            out = [(items[i], float(s[i])) for i in np.argsort(-s, kind="stable")[:k] if s[i] >= self.cfg.min_overlap]
+        else:
+            d = view_distance(np.asarray(query_pose, dtype=np.float64), np.stack([e.pose for e in items]),
+                              self.cfg.angle_weight)
+            out = [(items[i], float(d[i])) for i in np.argsort(d, kind="stable")[:k] if d[i] <= self.cfg.max_distance]
         for e, _ in out:
             e.hits += 1
         return out
 
-    def conditioning(self, query_pose, k: int, current_step: int | None = None, cell_id=None):
+    def conditioning(self, query_pose, k: int, current_step: int | None = None, cell_id=None,
+                     vis: np.ndarray | None = None):
         """Retrieve and pack as (payloads list, pose features [k, POSE_FEAT_DIM]); empty slots are invalid."""
-        hits = self.retrieve(query_pose, k, current_step, cell_id)
+        hits = self.retrieve(query_pose, k, current_step, cell_id, vis)
         feats = np.zeros((k, POSE_FEAT_DIM), np.float32)
         payloads = [None] * k
         for i, (e, _) in enumerate(hits):
