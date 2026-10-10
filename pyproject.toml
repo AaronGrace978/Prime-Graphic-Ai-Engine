@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prime-engine"
+version = "0.0.1"
+description = "Prime Graphic AI Engine: action-conditioned diffusion world model + Solidify persistence harness (PoC)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary (all rights reserved) - see README" }
+dependencies = [
+    "torch>=2.7",
+    "numpy>=1.26",
+    "pillow>=10",
+    "imageio>=2.34",
+    "pyyaml>=6",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+notebook = ["matplotlib>=3.8", "ipywidgets>=8"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["prime_engine*"]
