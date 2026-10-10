@@ -32,9 +32,10 @@ class PlaySession:
             frames.append(self.world.render())
             poses.append(self.world.pose.copy())
             cells.append(self.world.room_at(*self.world.pose[:2]))
+        vis = np.stack([self.world.visibility(p) for p in poses])[None]
         for r in self.runners.values():
             r.reset(np.stack(frames)[None], np.array(acts)[None], np.stack(poses)[None], cell_ids=np.array(cells)[None],
-                    cell_graphs=[self.world.cell_graph()], world_seeds=[self.world.world_seed])
+                    cell_graphs=[self.world.cell_graph()], world_seeds=[self.world.world_seed], visibility=vis)
         self.last = {"gt": frames[-1], "no_harness": frames[-1], "solidify": frames[-1]}
         self.trail = [p for p in poses]
 
@@ -43,8 +44,9 @@ class PlaySession:
         cell = self.world.room_at(*pose[:2])
         self.trail.append(pose.copy())
         self.last = {"gt": self.world.render()}
+        vis = self.world.visibility(pose)[None]
         for name, r in self.runners.items():
-            self.last[name] = r.step([action], pose[None], np.array([cell]))[0]
+            self.last[name] = r.step([action], pose[None], np.array([cell]), visibility=vis)[0]
         return self.last
 
     def cells(self) -> list[dict]:

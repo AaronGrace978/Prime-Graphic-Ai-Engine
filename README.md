@@ -14,17 +14,40 @@ This repository is the **v0 proof of concept**. It is small enough to train on a
 |---|---|---|
 | Multi-room world | `prime_engine/world/` | 2×2 rooms joined by doorways, rendered by a NumPy raycaster. Each episode gets random wall colours per room, so a room's look can't be guessed from geometry; it has to be remembered. Provides kinematics/collision (the "engine"), depth, instance maps and a cell graph. |
 | Capture harness | `prime_engine/world/dataset.py`, `schema.py` | Scripted explorer that leaves and re-enters rooms. Logs RGB, linear depth, instance id, camera K, `T_world_cam` (6DoF), player pose, key bitmask + mouse dx, discrete action, cell id, portal crossings, per-cell state record + state hash. |
-| World model | `prime_engine/models/` | UNet denoiser (v-prediction, cosine schedule, min-SNR loss, DDIM sampling). Conditioned on the last K frames, the last K actions, context-noise level (GameNGen-style anti-drift augmentation) and M memory views with their relative poses. |
-| Solidify v0 | `prime_engine/harness/solidify.py` | Cells (rooms from the engine, or a hash grid in "Dream" mode). Each cell holds **pose-keyed keyframes** (position bin × heading bin, first write wins), a status (`UNSEEN → FORMING → SOLID`; `DIRTY` after a state edit), a version and a **state hash** = H(keyframe content, state record, runner id). Retrieval returns the closest views by pose from the current cell and its portal neighbours. SOLID cells are read-only. |
+| World model | `prime_engine/models/` | UNet denoiser (v-prediction, cosine schedule, min-SNR loss, DDIM sampling). Conditioned on the last K frames, the last K actions, context-noise level (GameNGen-style anti-drift augmentation) and M memory views with their relative poses. When memory is present, the context is sometimes hue-corrupted in training, so the model learns to trust memory over its own drifted frames. |
+| Solidify v0 | `prime_engine/harness/solidify.py` | Cells (rooms from the engine, or a hash grid in "Dream" mode). Each cell holds **pose-keyed keyframes** (position bin × heading bin, first write wins), a status (`UNSEEN → FORMING → SOLID`; `DIRTY` after a state edit), a version and a **state hash** = H(keyframe content, state record, runner id). SOLID cells are read-only. Retrieval searches the current cell and its portal neighbours and ranks views by **FOV overlap**: the cosine overlap of the engine's histograms of visible wall faces, a surfel-vote analogue. This finds room A's stored views even when you look back at A through a doorway from far away. Pose-distance retrieval is still available as a fallback. |
 | Rollout | `prime_engine/harness/rollout.py`, `play.py` | Batched autoregressive renderer: the engine supplies pose and cell id, the model draws the frame, and Solidify stores and retrieves views. `PlaySession` runs harness-off and harness-on side by side for interactive play. |
 | Benchmark | `prime_engine/eval/` | "The Return": look around room A, go to room B, come back, look around A again. Scores revisit consistency with vs. without Solidify. |
 | Runtime | `runtime/` | Placeholder for the native C++/Vulkan runtime (not started on purpose). |
 
-Training-time memory retrieval uses exactly the same pose distance and relative-pose features as runtime retrieval (`harness/geometry.py`). Memory is randomly dropped during training, so one checkpoint serves both "harness off" and "harness on".
+Training-time memory retrieval mirrors the runtime store. Only canonical (first-write) views older than the context window are candidates, ranked by the same FOV overlap, with the same relative-pose features (`harness/geometry.py`). Half of each batch comes from true revisits, where the place was last seen long before the context window. Memory is randomly dropped during training, so one checkpoint serves both "harness off" and "harness on".
 
 ## Results (v0 smoke run)
 
-RESULTS_PLACEHOLDER
+The model is tiny (1.3M parameters, 32×32) and trained on a 4-core CPU (no GPU): 6k steps (about 17 min), then a 4k-step fine-tune with context-corruption augmentation (`train.ctx_corrupt=0.2`, about 10 min). The benchmark is "The Return" on 32 held-out worlds with random room colours. Each world has 136 frames; only the first 4 are real, and everything else is generated autoregressively. Both modes use the **same checkpoint and the same noise**; the harness is the only difference.
+
+| Metric (revisit look-around in room A) | No harness | **Solidify** | Paired diff (± s.e.) | Solidify better in |
+|---|---|---|---|---|
+| PSNR, revisit vs. first visit (self-consistency) | 14.86 dB | **16.61 dB** | +1.75 ± 0.21 dB | 31 / 32 worlds |
+| PSNR, revisit vs. ground truth | 14.81 dB | **15.46 dB** | +0.65 ± 0.29 dB | 24 / 32 worlds |
+| Room-colour accuracy (walls painted in the room's true colour; chance = 0.125) | 0.12 | **0.26** | +0.15 ± 0.04 | — |
+
+What this does and doesn't show:
+
+- With Solidify, a room comes back **looking like it did on the first visit** in 31 of 32 worlds. Without it, the model re-hallucinates the room, and revisit colour accuracy falls to chance.
+- Absolute fidelity is low because the CPU model is small. It already drifts during the first 360° look-around (first-visit colour accuracy is only about 0.3). Solidify then faithfully restores the drifted version. Fidelity is a model-capacity problem, so expect it to improve with the T4 / 5060 Ti configs.
+- The context-corruption fine-tune taught the model to trust memory over its own drifting frames. Before it, the gain in self-consistency PSNR was the same (+1.72 dB), but the colour-accuracy gain was smaller (+0.10). It costs some first-visit fidelity.
+
+Reproduce:
+
+```bash
+python scripts/train.py --config configs/cpu_smoke.yaml train.steps=6000 train.ctx_corrupt=0 train.out_dir=runs/stage1
+python scripts/train.py --config configs/cpu_smoke.yaml train.steps=4000 train.init_from=runs/stage1/model.pt \
+    train.out_dir=runs/stage2 train.warmup=100 train.lr=3e-4
+python scripts/eval_revisit.py --ckpt runs/stage2/model.pt --worlds 32
+```
+
+(`configs/cpu_smoke.yaml` on its own runs one 10k-step schedule with the augmentation from the start.)
 
 ## Run it in Colab
 
@@ -44,7 +67,7 @@ pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 pip install -e . --no-deps
 
-# CPU smoke test (~15 min on 4 cores): data -> train -> benchmark
+# CPU run (~30 min on 4 cores; add train.steps=1000 for a quick check): data -> train -> benchmark
 python scripts/train.py --config configs/cpu_smoke.yaml
 python scripts/eval_revisit.py --ckpt runs/cpu_smoke/model.pt
 
@@ -79,7 +102,7 @@ tests/                   smoke tests (pytest)
 ## Known v0 simplifications
 
 - Pixel-space diffusion at 32–64 px, trained from scratch. No pretrained backbone and no VAE latents yet. The memory payload is opaque, so it can hold latents later.
-- Memory views are channel-concatenated, and retrieval uses pose distance. Next steps: FOV-overlap retrieval, memory attention, a 3D cache with guide renders and a consistency guard.
+- Memory views are channel-concatenated. FOV overlap comes from engine geometry (Anchored mode), and Dream mode would need model-predicted depth. Next steps: memory attention, a 3D cache with guide renders and a consistency guard.
 - Cell "coverage" is approximated by heading coverage at keyframe positions. State records are static (room colours), and the state hash uses BLAKE2b (stdlib) instead of BLAKE3.
 - `pose_seeded_noise` (Exact-Replay flavour) is available in `SolidifyConfig` but off by default. Enable it with `eval_revisit.py --pose-noise` to ablate it.
 
